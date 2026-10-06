@@ -1,0 +1,41 @@
+--- /mnt/data/check_s3d/Simplifier3D_v0_1_from_v26/rdp_simplifier26.py	2026-09-28 06:53:30.000000000 +0000
++++ /mnt/data/Simplifier3D_v0_1_CORRECT/rdp_simplifier26.py	2026-10-02 15:47:12.816339992 +0000
+@@ -36,6 +36,7 @@
+ from matplotlib.figure import Figure
+ 
+ from geometry_module import GeometryPage
++from geometry3d_module import Geometry3DPage
+ 
+ from trajectory_simplifier_core import (
+     TrajectoryPoint,
+@@ -983,7 +984,7 @@
+         self.current_file: Optional[Path] = None
+         self.last_epsilon = 20.0
+ 
+-        self.setWindowTitle("RDP Trajectory Simplifier 26 — Machine Calibration + 3-Point Arc FIX")
++        self.setWindowTitle("Simplifier3D v0.1 — based on RDP Simplifier 26")
+         self.resize(1500, 920)
+         self.setMinimumSize(1100, 700)
+         self._build_ui()
+@@ -1193,6 +1194,12 @@
+         self.geometry_page = GeometryPage(status_callback=self._set_status)
+         self.main_tabs.addTab(self.geometry_page, "Geometria AB–BC")
+ 
++        # Simplifier3D stage 1: the original v26 application stays intact.
++        # We append exactly one new workspace whose RDP control flow is the
++        # v26 XY logic generalized only from (X,Y) to (X,Y,Z).
++        self.geometry3d_page = Geometry3DPage(status_callback=self._set_status)
++        self.main_tabs.addTab(self.geometry3d_page, "Geometry 3D")
++
+         # ----- callbacks -----
+         self.open_btn.clicked.connect(self.open_file)
+         self.save_btn.clicked.connect(self.save_result)
+@@ -1509,7 +1516,7 @@
+ 
+ def main() -> int:
+     app = QApplication(sys.argv)
+-    app.setApplicationName("RDP Trajectory Simplifier 25")
++    app.setApplicationName("Simplifier3D")
+     window = MainWindow()
+     window.showMaximized()
+     return app.exec()

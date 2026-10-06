@@ -1,0 +1,32 @@
+{
+  "mechanism": {
+    "AB_length": 1000.0,
+    "BC_length": 500.0,
+    "home_B0": {
+      "x": 1000.0,
+      "y": 0.0
+    },
+    "home_C0": {
+      "x": 1250.0,
+      "y": 433.013
+    },
+    "home_tolerance": 1.0
+  },
+  "axis_A": {
+    "encoder_counts_per_rev": 4000,
+    "gearbox": 20.0,
+    "direction": 1
+  },
+  "axis_B": {
+    "encoder_counts_per_rev": 4000,
+    "gearbox": 10.0,
+    "direction": 1
+  },
+  "generation_defaults": {
+    "max_xy_error": 2.0,
+    "target_points": 0,
+    "output_step_ms": 25,
+    "timing": "Original timing",
+    "path_speed": 100.0
+  }
+}

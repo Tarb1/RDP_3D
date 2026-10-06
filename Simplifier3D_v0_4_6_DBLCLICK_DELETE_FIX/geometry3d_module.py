@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Sequence
 import sys
+import numpy as np
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QCursor
@@ -569,8 +570,7 @@ class XYZCanvas(QWidget):
     def _find_edited_segment_xy(self, x, y, radius_px=14.0):
         """Exact v26 screen-pixel segment hit test."""
         if (
-            self.projection_name == "3D"
-            or len(self.edited) < 2
+            len(self.edited) < 2
             or not self.axes.bbox.contains(x, y)
         ):
             return None
@@ -581,8 +581,13 @@ class XYZCanvas(QWidget):
         for i in range(len(self.edited) - 1):
             a = self.edited[i]
             b = self.edited[i + 1]
-            au, av = self._projection_pair(a)
-            bu, bv = self._projection_pair(b)
+            if self.projection_name == "3D":
+                matrix = self.axes.get_proj()
+                au, av, _ = proj3d.proj_transform(a.x, a.y, a.z, matrix)
+                bu, bv, _ = proj3d.proj_transform(b.x, b.y, b.z, matrix)
+            else:
+                au, av = self._projection_pair(a)
+                bu, bv = self._projection_pair(b)
 
             ax, ay = self.axes.transData.transform((au, av))
             bx, by = self.axes.transData.transform((bu, bv))
@@ -606,6 +611,14 @@ class XYZCanvas(QWidget):
             d2 = (float(x) - px) ** 2 + (float(y) - py) ** 2
             if d2 <= best_d2:
                 best_d2 = d2
+                if self.projection_name == "3D":
+                    # Perspective screen fraction differs from world fraction.
+                    wa = float((matrix @ np.array([a.x, a.y, a.z, 1.0]))[3])
+                    wb = float((matrix @ np.array([b.x, b.y, b.z, 1.0]))[3])
+                    divisor = (1.0 - alpha) * wb + alpha * wa
+                    if abs(divisor) <= 1e-12:
+                        continue
+                    alpha = alpha * wa / divisor
                 best = (i, alpha)
 
         return best
@@ -649,8 +662,9 @@ class XYZCanvas(QWidget):
             return
 
         if self.projection_name == "3D":
-            # Selection ring in 3D is redrawn only by _draw().
-            self._selection_artist.set_visible(False)
+            p = self.edited[self.selected_index]
+            self._selection_artist._offsets3d = ([p.x], [p.y], [p.z])
+            self._selection_artist.set_visible(True)
             return
 
         u, v = self._projection_pair(self.edited[self.selected_index])
@@ -659,7 +673,16 @@ class XYZCanvas(QWidget):
 
     def _refresh_edit_artists(self):
         """Exact v26 idea: update artists without rebuilding the whole figure."""
-        if self.projection_name == "3D" or not self.edited:
+        if not self.edited:
+            return
+        if self.projection_name == "3D":
+            xs, ys, zs = ([getattr(p, coord) for p in self.edited]
+                          for coord in ("x", "y", "z"))
+            if self._edited_line is not None:
+                self._edited_line.set_data_3d(xs, ys, zs)
+            if self._edited_scatter is not None:
+                self._edited_scatter._offsets3d = (xs, ys, zs)
+            self._refresh_selection_artist()
             return
 
         aa = []
@@ -818,7 +841,7 @@ class XYZCanvas(QWidget):
 
     def _handle_double_click_xy(self, x: float, y: float):
         """Shared v26 Add action, callable from Qt dblclick or press fallback."""
-        if self.projection_name == "3D" or self.arc_select_mode:
+        if self.arc_select_mode:
             return False
 
         # A native double click may follow a press that began a drag.
@@ -896,24 +919,10 @@ class XYZCanvas(QWidget):
             return False
         x, y = xy
 
-        # In 3D, preserve native Matplotlib navigation unless selecting ARC.
-        if self.projection_name == "3D":
-            if (
-                self.arc_select_mode
-                and button == Qt.MouseButton.LeftButton
-            ):
-                index = self._find_edited_point_xy(x, y)
-                if (
-                    index is not None
-                    and index not in self.arc_indices
-                    and self.arc_click_callback is not None
-                ):
-                    self.arc_click_callback(int(index))
-                return True
-            return False
-
         # Exact v26 CAD rule: right-button drag pans in every mode.
         if button == Qt.MouseButton.RightButton:
+            if self.projection_name == "3D":
+                return False
             return self._start_pan_xy(x, y, button)
 
         if button != Qt.MouseButton.LeftButton:
@@ -946,11 +955,18 @@ class XYZCanvas(QWidget):
         self._select_point(index)
 
         if index is None:
-            return True
+            # Empty-space gestures still use Matplotlib's 3D navigation.
+            return self.projection_name != "3D"
 
         self._dragging_point = True
         self._point_moved = False
         self._drag_snapshot = _clone_geom3d(self.edited)
+        if self.projection_name == "3D":
+            point = self.edited[index]
+            self._drag_projection = self.axes.get_proj().copy()
+            self._drag_depth = proj3d.proj_transform(
+                point.x, point.y, point.z, self._drag_projection
+            )[2]
 
         if self.edit_callback is not None:
             self.edit_callback(
@@ -975,9 +991,6 @@ class XYZCanvas(QWidget):
             self._pan_to_xy(x, y)
             return True
 
-        if self.projection_name == "3D":
-            return False
-
         if not self._dragging_point:
             return False
 
@@ -993,7 +1006,12 @@ class XYZCanvas(QWidget):
 
         old_xyz = (point.x, point.y, point.z)
 
-        if self.projection_name == "XY":
+        if self.projection_name == "3D":
+            xyz = proj3d.inv_transform(
+                u, v, self._drag_depth, np.linalg.inv(self._drag_projection)
+            )
+            point.x, point.y, point.z = (float(np.asarray(value).item()) for value in xyz)
+        elif self.projection_name == "XY":
             point.x = float(u)
             point.y = float(v)
         elif self.projection_name == "XZ":
@@ -1009,6 +1027,9 @@ class XYZCanvas(QWidget):
         # Exact v26: refresh existing artists only.
         self._refresh_edit_artists()
         self.canvas.draw()
+        if self.edit_callback is not None:
+            self.edit_callback("drag_move", self.selected_index,
+                               self.projection_name, None, None, None)
         return True
 
     def _direct_mouse_release(self, event):
@@ -1018,14 +1039,11 @@ class XYZCanvas(QWidget):
             self._finish_pan()
             return True
 
-        if self.projection_name == "3D":
-            return False
-
         if button != Qt.MouseButton.LeftButton:
             return False
 
         if not self._dragging_point:
-            return True
+            return self.projection_name != "3D"
 
         self._dragging_point = False
         self.canvas.setCursor(QCursor(Qt.ArrowCursor))
@@ -1049,8 +1067,7 @@ class XYZCanvas(QWidget):
     def _direct_mouse_double_click(self, event):
         """Native Qt double-click path; press-event fallback exists as well."""
         if (
-            self.projection_name == "3D"
-            or self.arc_select_mode
+            self.arc_select_mode
             or event.button() != Qt.MouseButton.LeftButton
         ):
             return False
@@ -1175,6 +1192,12 @@ class XYZCanvas(QWidget):
                     color="#FF7A00",
                     zorder=5,
                 )
+
+                self._selection_artist = self.axes.scatter(
+                    [], [], [], s=140, facecolors="none", edgecolors="black",
+                    linewidths=1.8, depthshade=False, zorder=9,
+                )
+                self._refresh_selection_artist()
 
                 for point in self.edited:
                     if point.is_marker:
@@ -2141,6 +2164,14 @@ class Geometry3DPage(QWidget):
             return
 
         if action == "drag_move":
+            # All views share the edited list; refresh artists during the drag
+            # without clearing axes or changing the current camera.
+            for canvas in (self.canvas_3d, self.canvas_xy,
+                           self.canvas_xz, self.canvas_yz):
+                if canvas.projection_name != projection:
+                    canvas.selected_index = self.selected_index
+                    canvas._refresh_edit_artists()
+                    canvas.canvas.draw_idle()
             return
 
         if action == "drag_end":

@@ -4,7 +4,9 @@ import random
 import unittest
 from types import SimpleNamespace
 
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, QPointF, QEvent, Qt
+from PySide6.QtGui import QMouseEvent
+from mpl_toolkits.mplot3d import proj3d
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from geometry_module import GeometryPoint, simplify_xy, simplify_xy_to_target
@@ -120,6 +122,59 @@ class Geometry3DTests(unittest.TestCase):
                 self.page.undo_3d()
                 p=self.page.simplified[1]
                 self.assertEqual((p.x,p.y,p.z),(5,6,7))
+
+    def test_real_3d_add_select_drag_delete(self):
+        for elev,azim in [(30,-60),(15,110)]:
+            with self.subTest(view=(elev,azim)):
+                self.page.undo_stack=[]
+                self.page.redo_stack=[]
+                self.load([GeometryPoint3D(0,0,0,0), GeometryPoint3D(10,10,8,6)])
+                p=self.page
+                c=p.canvas_3d
+                c.resize(700,550)
+                c.show()
+                APP.processEvents()
+                c.axes.view_init(elev=elev,azim=azim)
+                c.canvas.draw()
+                def screen(point):
+                    u,v,_=proj3d.proj_transform(point.x,point.y,point.z,c.axes.get_proj())
+                    x,y=c.axes.transData.transform((u,v))
+                    ratio=c.canvas.device_pixel_ratio
+                    return QPoint(round(x/ratio), round((c.figure.bbox.height-y)/ratio))
+                pos=screen(GeometryPoint3D(5,5,4,3))
+                QTest.mouseClick(c.canvas,Qt.MouseButton.LeftButton,pos=pos)
+                QTest.mouseDClick(c.canvas,Qt.MouseButton.LeftButton,pos=pos)
+                QTest.mouseRelease(c.canvas,Qt.MouseButton.LeftButton,pos=pos)
+                self.assertEqual(len(p.simplified),3)
+                self.assertEqual(len(p.undo_stack),1)
+                new=p.simplified[1]
+                self.assertAlmostEqual(new.x/10,new.y/8)
+                self.assertAlmostEqual(new.x/10,new.z/6)
+                pos=screen(new)
+                c._last_left_press_xy=None
+                QTest.mousePress(c.canvas,Qt.MouseButton.LeftButton,pos=pos)
+                self.assertEqual(p.selected_index,1)
+                self.assertTrue(c._selection_artist.get_visible())
+                before=(new.x,new.y,new.z)
+                depth=proj3d.proj_transform(*before,c.axes.get_proj())[2]
+                dest=pos+QPoint(25,-20)
+                event=QMouseEvent(QEvent.Type.MouseMove,QPointF(dest),QPointF(dest),
+                                 Qt.MouseButton.NoButton,Qt.MouseButton.LeftButton,Qt.KeyboardModifier.NoModifier)
+                APP.sendEvent(c.canvas,event)
+                self.assertNotEqual((new.x,new.y,new.z),before)
+                self.assertAlmostEqual(proj3d.proj_transform(new.x,new.y,new.z,c.axes.get_proj())[2],depth)
+                xs,ys,zs=c._edited_line.get_data_3d()
+                self.assertEqual((xs[1],ys[1],zs[1]),(new.x,new.y,new.z))
+                QTest.mouseRelease(c.canvas,Qt.MouseButton.LeftButton,pos=dest)
+                self.assertEqual(len(p.undo_stack),2)
+                self.assertFalse(c._dragging_point)
+                QTest.mouseClick(p.delete_btn,Qt.MouseButton.LeftButton)
+                self.assertEqual(len(p.simplified),2)
+                self.assertEqual(len(c._edited_line.get_data_3d()[0]),2)
+                p.undo_3d()
+                self.assertEqual(len(p.simplified),3)
+                p.undo_stack=[]
+                p.redo_stack=[]
 
     def test_marker_and_endpoint_protection(self):
         c=self.load([GeometryPoint3D(0,0,0,0),GeometryPoint3D(1,1,1,1,'M1'),GeometryPoint3D(2,2,0,2)])
